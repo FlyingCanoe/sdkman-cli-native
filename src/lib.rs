@@ -4,6 +4,13 @@ pub mod constants {
     pub const CURRENT_DIR: &str = "current";
     pub const DEFAULT_SDKMAN_HOME: &str = ".sdkman";
     pub const SDKMAN_DIR_ENV_VAR: &str = "SDKMAN_DIR";
+    pub const CANDIDATES_DIR_VAR: &str = "SDKMAN_CANDIDATES_DIR";
+    pub const SDKMAN_CANDIDATES_API_VAR: &str = "SDKMAN_CANDIDATES_API";
+    pub const SDKMAN_CANDIDATES_API_AVAILABLE_VAR: &str = "SDKMAN_AVAILABLE";
+    pub const PLATEFORM_NAME_VAR: &str = "SDKMAN_PLATFORM";
+    pub const ALLOW_UNSECURE_TLS_VAR: &str = "sdkman_insecure_ssl";
+    pub const SHOULD_RETRY_VAR: &str = "sdkman_curl_retry";
+    pub const MAX_RETRY: &str = "sdkman_curl_retry_max_time";
     pub const TMP_DIR: &str = "tmp";
     pub const VAR_DIR: &str = "var";
 }
@@ -11,12 +18,80 @@ pub mod constants {
 pub mod helpers {
     use colored::Colorize;
     use directories::UserDirs;
+    use reqwest::blocking::ClientBuilder;
+    use std::fmt::format;
     use std::path::PathBuf;
     use std::{env, fs, process};
 
     use crate::constants::{
-        CANDIDATES_DIR, CANDIDATES_FILE, DEFAULT_SDKMAN_HOME, SDKMAN_DIR_ENV_VAR, VAR_DIR,
+        ALLOW_UNSECURE_TLS_VAR, CANDIDATES_DIR, CANDIDATES_DIR_VAR, CANDIDATES_FILE,
+        DEFAULT_SDKMAN_HOME, PLATEFORM_NAME_VAR, SDKMAN_CANDIDATES_API_AVAILABLE_VAR,
+        SDKMAN_CANDIDATES_API_VAR, SDKMAN_DIR_ENV_VAR, VAR_DIR,
     };
+
+    pub fn infer_candidate_version(
+        candidate: &str,
+        version: Option<String>,
+        folder: Option<String>,
+    ) -> String {
+        let api_available = env::var(SDKMAN_CANDIDATES_API_AVAILABLE_VAR).unwrap() == "true";
+        let api_url = env::var(SDKMAN_CANDIDATES_API_VAR).unwrap();
+        let plateform = env::var(PLATEFORM_NAME_VAR).unwrap();
+        let candidate_dir = env::var(CANDIDATES_DIR_VAR).unwrap();
+        let sdkman_dir = infer_sdkman_dir();
+        if api_available {
+            let version = version.unwrap_or_else(|| {
+                get(format!("{api_url}/candidates/default/{candidate}").as_str())
+            });
+            let version_valid = get(format!(
+                "{api_url}/candidates/validate/{candidate}/{version}/{plateform}"
+            )
+            .as_str());
+            let version_valid = version_valid == "valid";
+            if version_valid {
+                return version;
+            } else if folder.is_some() {
+                return version;
+            } else if fs::exists(format!("{candidate_dir}/{candidate}/{version}")).unwrap() {
+                return version;
+            }
+
+            eprintln!(
+                "\n\
+            Stop! {candidate} {version} is not available. Possible causes:\n \
+			* {version} is an invalid version\n \
+			* {candidate} binaries are incompatible with your platform\n \
+			* {candidate} has not been released yet\
+			\
+			Tip: see all available versions for your platform:\n\
+			\
+			$ sdk list {candidate}",
+                version = version.italic(),
+                candidate = candidate.bold()
+            )
+        } else if fs::metadata(format!("{candidate_dir}/{candidate}"))
+            .unwrap()
+            .is_dir()
+        {
+        } else if known_candidates(sdkman_dir).contains(x) {
+        }
+
+        todo!()
+    }
+
+    pub fn get(url: &str) -> String {
+        let allow_unsecure = env::var(ALLOW_UNSECURE_TLS_VAR).unwrap() == "true";
+
+        ClientBuilder::new()
+            .danger_accept_invalid_certs(allow_unsecure)
+            .build()
+            .unwrap()
+            .get(url)
+            .send()
+            .unwrap()
+            .text()
+            .unwrap()
+    }
 
     pub fn infer_sdkman_dir() -> PathBuf {
         match env::var(SDKMAN_DIR_ENV_VAR) {
